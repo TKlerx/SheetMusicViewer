@@ -348,6 +348,32 @@ namespace SheetMusicLib
         public int MaxPageNum => PageNumberOffset + NumPagesInSet;
 
         /// <summary>
+        /// Get the last page number for a TOC entry.
+        /// </summary>
+        /// <param name="tocIndex">Index in TocEntries</param>
+        /// <returns>The final page number for the TOC entry (inclusive)</returns>
+        public int GetLastPageOfTocEntry(int tocIndex)
+        {
+            var fallbackLastPage = MaxPageNum - 1;
+            if (TocEntries == null || TocEntries.Count == 0)
+            {
+                return fallbackLastPage;
+            }
+
+            if (tocIndex < 0 || tocIndex >= TocEntries.Count)
+            {
+                return fallbackLastPage;
+            }
+
+            if (tocIndex < TocEntries.Count - 1)
+            {
+                return TocEntries[tocIndex + 1].PageNo - 1;
+            }
+
+            return fallbackLastPage;
+        }
+
+        /// <summary>
         /// Path to the JSON metadata file (used by Avalonia/Desktop app)
         /// </summary>
         public string JsonFilePath => System.IO.Path.ChangeExtension(FullPathFile, ".json");

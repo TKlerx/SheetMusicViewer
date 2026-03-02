@@ -91,6 +91,16 @@ public class ChooseMusicWindow : Window
     /// The selected page number (for favorites/query selection)
     /// </summary>
     public int ChosenPageNo { get; private set; }
+
+    /// <summary>
+    /// The selected playlist when navigation comes from the playlist tab.
+    /// </summary>
+    public Playlist? ChosenPlaylist { get; private set; }
+
+    /// <summary>
+    /// The selected entry index within ChosenPlaylist.
+    /// </summary>
+    public int ChosenPlaylistEntryIndex { get; private set; } = -1;
     
     /// <summary>
     /// The current root folder (may have changed if user selected a new folder)
@@ -1081,6 +1091,8 @@ public class ChooseMusicWindow : Window
                         _favoritesListBox.SelectedItem = panel;
                         ChosenPdfMetaData = item.Metadata;
                         ChosenPageNo = item.PageNo;
+                        ChosenPlaylist = null;
+                        ChosenPlaylistEntryIndex = -1;
                         Close();
                         e.Handled = true;
                     }
@@ -1597,9 +1609,26 @@ public class ChooseMusicWindow : Window
         
         var metadata = _pdfMetadata.FirstOrDefault(p => p.GetBookName(_rootFolder) == entry.BookName);
         if (metadata == null) return false;
+
+        int selectedIndex = -1;
+        var indexProp = selectedItem.GetType().GetProperty("_Index");
+        if (indexProp?.GetValue(selectedItem) is int idx)
+        {
+            selectedIndex = idx;
+        }
+        if (selectedIndex < 0 && _currentPlaylist != null)
+        {
+            selectedIndex = _currentPlaylist.Entries.IndexOf(entry);
+        }
+        if (selectedIndex < 0)
+        {
+            selectedIndex = 0;
+        }
         
         ChosenPdfMetaData = metadata;
         ChosenPageNo = entry.PageNo;
+        ChosenPlaylist = _currentPlaylist;
+        ChosenPlaylistEntryIndex = selectedIndex;
         Close();
         return true;
     }
@@ -1620,6 +1649,8 @@ public class ChooseMusicWindow : Window
         
         ChosenPdfMetaData = tup.Item1;
         ChosenPageNo = tup.Item2.PageNo;
+        ChosenPlaylist = null;
+        ChosenPlaylistEntryIndex = -1;
         Close();
         return true;
     }
@@ -1934,6 +1965,8 @@ public class ChooseMusicWindow : Window
                     _lbBooks.SelectedItem = panel;
                     ChosenPdfMetaData = cache.Metadata;
                     ChosenPageNo = cache.Metadata.LastPageNo;
+                    ChosenPlaylist = null;
+                    ChosenPlaylistEntryIndex = -1;
                     Close();
                     e.Handled = true;
                 }
@@ -2131,6 +2164,8 @@ public class ChooseMusicWindow : Window
                     {
                         ChosenPdfMetaData = cache.Metadata;
                         ChosenPageNo = cache.Metadata.LastPageNo;
+                        ChosenPlaylist = null;
+                        ChosenPlaylistEntryIndex = -1;
                     }
                     break;
                     
@@ -2139,6 +2174,8 @@ public class ChooseMusicWindow : Window
                     {
                         ChosenPdfMetaData = favItem.Metadata;
                         ChosenPageNo = favItem.PageNo;
+                        ChosenPlaylist = null;
+                        ChosenPlaylistEntryIndex = -1;
                     }
                     break;
                     
