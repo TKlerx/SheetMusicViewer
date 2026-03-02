@@ -1755,6 +1755,63 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        if (_playlistContext != null && _playlistContext.AutoAdvanceEnabled)
+        {
+            var titleRange = _playlistContext.GetTitlePageRange(_currentPdfMetaData);
+            var lastVisiblePage = CurrentPageNumber + NumPagesPerView - 1;
+
+            if (delta > 0 && lastVisiblePage >= titleRange.LastPage)
+            {
+                while (true)
+                {
+                    var nextEntry = _playlistContext.AdvanceToNext();
+                    if (nextEntry == null)
+                    {
+                        return;
+                    }
+
+                    var nextMetadata = ResolveMetadataByBookName(nextEntry.BookName);
+                    if (nextMetadata != null)
+                    {
+                        _isInSplitView = false;
+                        _isBackwardSplitAnchoredOnCurrent = false;
+                        NotifyPlaylistContextChanged();
+                        await LoadPdfFileAndShowAsync(nextMetadata, nextEntry.PageNo);
+                        return;
+                    }
+
+                    ShowTemporarySkipNotification(nextEntry);
+                }
+            }
+
+            TryPrecacheNextPlaylistEntry();
+
+            if (delta < 0 && CurrentPageNumber <= titleRange.FirstPage)
+            {
+                while (true)
+                {
+                    var previousEntry = _playlistContext.GoToPrevious();
+                    if (previousEntry == null)
+                    {
+                        return;
+                    }
+
+                    var previousMetadata = ResolveMetadataByBookName(previousEntry.BookName);
+                    if (previousMetadata != null)
+                    {
+                        _isInSplitView = false;
+                        _isBackwardSplitAnchoredOnCurrent = false;
+                        NotifyPlaylistContextChanged();
+                        var previousRange = _playlistContext.GetTitlePageRange(previousMetadata);
+                        await LoadPdfFileAndShowAsync(previousMetadata, previousRange.LastPage);
+                        return;
+                    }
+
+                    ShowTemporarySkipNotification(previousEntry);
+                }
+            }
+        }
+
         if (_halfPageTurnEnabled && !Show2Pages)
         {
             var halfPageOffset = _currentPdfMetaData.PageNumberOffset;
@@ -1828,59 +1885,6 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                 }
                 await ShowPageAsync(CurrentPageNumber, preserveHalfPageState: true);
                 return;
-            }
-        }
-
-        if (_playlistContext != null && _playlistContext.AutoAdvanceEnabled)
-        {
-            var titleRange = _playlistContext.GetTitlePageRange(_currentPdfMetaData);
-            var lastVisiblePage = CurrentPageNumber + NumPagesPerView - 1;
-
-            if (delta > 0 && lastVisiblePage >= titleRange.LastPage)
-            {
-                while (true)
-                {
-                    var nextEntry = _playlistContext.AdvanceToNext();
-                    if (nextEntry == null)
-                    {
-                        return;
-                    }
-
-                    var nextMetadata = ResolveMetadataByBookName(nextEntry.BookName);
-                    if (nextMetadata != null)
-                    {
-                        NotifyPlaylistContextChanged();
-                        await LoadPdfFileAndShowAsync(nextMetadata, nextEntry.PageNo);
-                        return;
-                    }
-
-                    ShowTemporarySkipNotification(nextEntry);
-                }
-            }
-
-            TryPrecacheNextPlaylistEntry();
-
-            if (delta < 0 && CurrentPageNumber <= titleRange.FirstPage)
-            {
-                while (true)
-                {
-                    var previousEntry = _playlistContext.GoToPrevious();
-                    if (previousEntry == null)
-                    {
-                        return;
-                    }
-
-                    var previousMetadata = ResolveMetadataByBookName(previousEntry.BookName);
-                    if (previousMetadata != null)
-                    {
-                        NotifyPlaylistContextChanged();
-                        var previousRange = _playlistContext.GetTitlePageRange(previousMetadata);
-                        await LoadPdfFileAndShowAsync(previousMetadata, previousRange.LastPage);
-                        return;
-                    }
-
-                    ShowTemporarySkipNotification(previousEntry);
-                }
             }
         }
 
