@@ -129,6 +129,36 @@
                                     <CheckBox IsChecked="{Binding Show2Pages}" BorderThickness="0" IsHitTestVisible="False"/>
                                 </MenuItem.Icon>
                             </MenuItem>
+                            <MenuItem Name="mnuHalfPageTurn" Header="_Half-Page Turn" IsEnabled="{Binding IsHalfPageTurnAvailable}" ToolTip.Tip="Alternate full page and split half-page turns">
+                                <MenuItem.Icon>
+                                    <CheckBox IsChecked="{Binding HalfPageTurnEnabled}" BorderThickness="0" IsHitTestVisible="False"/>
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="Half-Page _Layout" IsEnabled="{Binding IsHalfPageTurnAvailable}">
+                                <MenuItem Name="mnuHalfPageLayoutPreview" Header="_Preview">
+                                    <MenuItem.Icon>
+                                        <CheckBox IsChecked="{Binding IsHalfPageLayoutPreview}" BorderThickness="0" IsHitTestVisible="False"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Name="mnuHalfPageLayoutReadingFlow" Header="_Reading Flow">
+                                    <MenuItem.Icon>
+                                        <CheckBox IsChecked="{Binding IsHalfPageLayoutReadingFlow}" BorderThickness="0" IsHitTestVisible="False"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                            </MenuItem>
+                            <MenuItem Name="mnuHalfPageBackwardHalfStep"
+                                      Header="Back _Half-Step Mode"
+                                      IsEnabled="{Binding IsHalfPageTurnAvailable}"
+                                      ToolTip.Tip="When enabled, Back starts with a half-step before moving to the previous full page">
+                                <MenuItem.Icon>
+                                    <CheckBox IsChecked="{Binding HalfPageBackwardHalfStep}" BorderThickness="0" IsHitTestVisible="False"/>
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Name="mnuAutoAdvancePlaylist" Header="_Auto-Advance Playlist" IsEnabled="{Binding HasPlaylistContext}" ToolTip.Tip="Automatically advance to the next playlist title">
+                                <MenuItem.Icon>
+                                    <CheckBox IsChecked="{Binding AutoAdvanceEnabled}" BorderThickness="0" IsHitTestVisible="False"/>
+                                </MenuItem.Icon>
+                            </MenuItem>
                             <MenuItem Name="mnuFullScreen" Header="_Full Screen" InputGesture="Alt+F" ToolTip.Tip="Toggle Full Screen mode">
                                 <MenuItem.Icon>
                                     <CheckBox IsChecked="{Binding #chkFullScreen.IsChecked}" BorderThickness="0"/>
@@ -153,6 +183,15 @@
                 <TextBlock Name="txtDesc1" Text="{Binding Description1}" HorizontalAlignment="Right" Margin="0,0,3,0" IsVisible="{Binding Show2Pages}"/>
             </StackPanel>
         </Grid>
+
+        <TextBlock Name="txtPlaylistPosition"
+                   Text="{Binding PlaylistPositionText}"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Bottom"
+                   Margin="0,0,0,8"
+                   FontSize="10"
+                   Foreground="Gray"
+                   IsVisible="{Binding HasPlaylistContext}"/>
     </Grid>
 </Window>
 

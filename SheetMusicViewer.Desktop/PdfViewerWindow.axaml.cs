@@ -12,6 +12,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using PDFtoImage;
 using SheetMusicLib;
@@ -32,6 +34,11 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
 
     private int _currentPageNumber = 1;
     private bool _show2Pages = true;
+    private bool _isInSplitView;
+    private bool _isBackwardSplitAnchoredOnCurrent;
+    private bool _halfPageTurnEnabled;
+    private bool _halfPageBackwardHalfStep;
+    private HalfPageTurnLayout _halfPageTurnLayout = HalfPageTurnLayout.Preview;
     private bool _pdfUIEnabled;
     private string _pdfTitle = string.Empty;
     private string _description0 = string.Empty;
@@ -46,12 +53,14 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
     private bool _isThumbnailLoadingInProgress;
     private int _cacheLoadingCount;
     private string _cacheStatus = string.Empty;
+    private string _playlistPositionText = string.Empty;
 
     // PDF metadata
     private string _rootMusicFolder = string.Empty;
     private List<PdfMetaDataReadResult> _lstPdfMetaFileData = new();
     private List<string> _lstFolders = new();
     private PdfMetaDataReadResult? _currentPdfMetaData;
+    private PlaylistContext? _playlistContext;
     
     // UI controls
     private InkCanvasControl? _inkCanvas0;
@@ -104,7 +113,19 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         // Load settings
         var settings = AppSettings.Instance;
         _show2Pages = settings.Show2Pages;
+        _halfPageTurnEnabled = settings.HalfPageTurnEnabled && !_show2Pages;
+        _halfPageTurnLayout = ParseHalfPageTurnLayout(settings.HalfPageTurnLayout);
+        _halfPageBackwardHalfStep = settings.HalfPageBackwardHalfStep;
         _rootMusicFolder = settings.RootFolderMRU.FirstOrDefault() ?? string.Empty;
+
+        // Refresh menu-bound properties after loading persisted backing fields.
+        OnPropertyChanged(nameof(Show2Pages));
+        OnPropertyChanged(nameof(IsHalfPageTurnAvailable));
+        OnPropertyChanged(nameof(HalfPageTurnEnabled));
+        OnPropertyChanged(nameof(HalfPageTurnLayout));
+        OnPropertyChanged(nameof(IsHalfPageLayoutPreview));
+        OnPropertyChanged(nameof(IsHalfPageLayoutReadingFlow));
+        OnPropertyChanged(nameof(HalfPageBackwardHalfStep));
         
         Trace.WriteLine($"PdfViewerWindow constructor: WindowMaximized={settings.WindowMaximized} from {AppSettings.SettingsPath}");
         
@@ -240,6 +261,36 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
             Show2Pages = !Show2Pages;
         };
 
+        var mnuHalfPageTurn = this.GetControl<MenuItem>("mnuHalfPageTurn");
+        mnuHalfPageTurn.Click += (s, e) =>
+        {
+            HalfPageTurnEnabled = !HalfPageTurnEnabled;
+        };
+
+        var mnuHalfPageLayoutPreview = this.GetControl<MenuItem>("mnuHalfPageLayoutPreview");
+        mnuHalfPageLayoutPreview.Click += (s, e) =>
+        {
+            HalfPageTurnLayout = HalfPageTurnLayout.Preview;
+        };
+
+        var mnuHalfPageLayoutReadingFlow = this.GetControl<MenuItem>("mnuHalfPageLayoutReadingFlow");
+        mnuHalfPageLayoutReadingFlow.Click += (s, e) =>
+        {
+            HalfPageTurnLayout = HalfPageTurnLayout.ReadingFlow;
+        };
+
+        var mnuHalfPageBackwardHalfStep = this.GetControl<MenuItem>("mnuHalfPageBackwardHalfStep");
+        mnuHalfPageBackwardHalfStep.Click += (s, e) =>
+        {
+            HalfPageBackwardHalfStep = !HalfPageBackwardHalfStep;
+        };
+
+        var mnuAutoAdvancePlaylist = this.GetControl<MenuItem>("mnuAutoAdvancePlaylist");
+        mnuAutoAdvancePlaylist.Click += (s, e) =>
+        {
+            AutoAdvanceEnabled = !AutoAdvanceEnabled;
+        };
+
         var mnuAbout = this.GetControl<MenuItem>("mnuAbout");
         mnuAbout.Click += BtnAbout_Click;
 
@@ -280,6 +331,10 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         _slider.TemplateApplied += Slider_TemplateApplied;
         _slider.AddHandler(RangeBase.ValueChangedEvent, Slider_ValueChanged);
 
+        var txtPageNo = this.GetControl<TextBox>("txtPageNo");
+        txtPageNo.LostFocus += TxtPageNo_LostFocus;
+        txtPageNo.KeyDown += TxtPageNo_KeyDown;
+
         // Add keyboard handler
         this.KeyDown += Window_KeyDown;
     }
@@ -318,6 +373,8 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                     
                     // Fall back to first PDF if GettingStarted not found
                     var pdfToLoad = gettingStartedPdf ?? _lstPdfMetaFileData[0];
+                    _playlistContext = null;
+                    NotifyPlaylistContextChanged();
                     await LoadPdfFileAndShowAsync(pdfToLoad, 0);
                 }
             }
@@ -340,6 +397,8 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                 
                 if (lastPdfMetaData != null)
                 {
+                    _playlistContext = null;
+                    NotifyPlaylistContextChanged();
                     await LoadPdfFileAndShowAsync(lastPdfMetaData, lastPdfMetaData.LastPageNo);
                     
                     // Load all thumbnails in the background while showing the doc
@@ -347,6 +406,8 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                 }
                 else
                 {
+                    _playlistContext = null;
+                    NotifyPlaylistContextChanged();
                     await ChooseMusicAsync();
                 }
             }
@@ -441,6 +502,9 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         // Save settings
         var settings = AppSettings.Instance;
         settings.Show2Pages = Show2Pages;
+        settings.HalfPageTurnEnabled = HalfPageTurnEnabled;
+        settings.HalfPageTurnLayout = HalfPageTurnLayout.ToString();
+        settings.HalfPageBackwardHalfStep = HalfPageBackwardHalfStep;
         settings.IsFullScreen = _chkFullScreen?.IsChecked == true;
         settings.WindowMaximized = WindowState == WindowState.Maximized;
         
@@ -480,6 +544,19 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
             
             if (chooser.ChosenPdfMetaData != null)
             {
+                if (chooser.ChosenPlaylist != null)
+                {
+                    _playlistContext = new PlaylistContext(
+                        chooser.ChosenPlaylist,
+                        _lstPdfMetaFileData,
+                        chooser.ChosenPlaylistEntryIndex);
+                }
+                else
+                {
+                    _playlistContext = null;
+                }
+
+                NotifyPlaylistContextChanged();
                 await LoadPdfFileAndShowAsync(chooser.ChosenPdfMetaData, chooser.ChosenPageNo);
             }
         }
@@ -813,7 +890,7 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         Description1 = string.Empty;
     }
     
-    private async Task ShowPageAsync(int pageNo)
+    private async Task ShowPageAsync(int pageNo, bool preserveHalfPageState = false)
     {
         try
         {
@@ -846,6 +923,28 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
             _disableSliderValueChanged = true;
             CurrentPageNumber = pageNo;
             _disableSliderValueChanged = false;
+
+            if (!preserveHalfPageState)
+            {
+                _isInSplitView = false;
+                _isBackwardSplitAnchoredOnCurrent = false;
+            }
+
+            var splitCompanionPageNo = _isBackwardSplitAnchoredOnCurrent ? CurrentPageNumber - 1 : CurrentPageNumber + 1;
+            if (_isInSplitView &&
+                (splitCompanionPageNo < pageNumberOffset || splitCompanionPageNo >= maxPageNum))
+            {
+                _isInSplitView = false;
+                _isBackwardSplitAnchoredOnCurrent = false;
+                splitCompanionPageNo = CurrentPageNumber + 1;
+            }
+            else if (!_isInSplitView)
+            {
+                _isBackwardSplitAnchoredOnCurrent = false;
+            }
+
+            _playlistContext?.UpdateContextForPage(CurrentPageNumber, _currentPdfMetaData);
+            NotifyPlaylistContextChanged();
             
             // Start cache entries for current and adjacent pages immediately (parallel prefetch)
             var cacheEntry0 = TryAddCacheEntry(pageNo);
@@ -854,7 +953,14 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            var cacheEntry1 = Show2Pages && pageNo + 1 < maxPageNum ? TryAddCacheEntry(pageNo + 1) : null;
+            var secondPageNo = _isInSplitView
+                ? splitCompanionPageNo
+                : pageNo + 1;
+            var cacheEntry1 = (Show2Pages || _isInSplitView) &&
+                              secondPageNo >= pageNumberOffset &&
+                              secondPageNo < maxPageNum
+                ? TryAddCacheEntry(secondPageNo)
+                : null;
             
             // Only prefetch adjacent pages if caching is enabled (otherwise it's wasted work)
             var cacheDisabled = AppSettings.Instance.UserOptions.DisablePageCache;
@@ -901,7 +1007,7 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                 }
                 catch (OperationCanceledException)
                 {
-                    cacheEntry1 = TryAddCacheEntry(pageNo + 1);
+                    cacheEntry1 = TryAddCacheEntry(secondPageNo);
                     if (cacheEntry1 != null)
                     {
                         page1Image = await cacheEntry1.Task;
@@ -918,7 +1024,7 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
             
             // Get ink stroke data for the pages
             var inkStroke0 = GetInkStrokeForPage(pageNo);
-            var inkStroke1 = page1Image != null ? GetInkStrokeForPage(pageNo + 1) : null;
+            var inkStroke1 = page1Image != null ? GetInkStrokeForPage(secondPageNo) : null;
             
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -936,7 +1042,89 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                     VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
                 };
 
-                if (Show2Pages && page1Image != null)
+                if (_isInSplitView && page1Image != null)
+                {
+                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Pixel) });
+                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+                    Bitmap topImage;
+                    Bitmap bottomImage;
+                    int topPageNo;
+                    int bottomPageNo;
+                    InkStrokeClass? topInkStroke;
+                    InkStrokeClass? bottomInkStroke;
+
+                    if (_isBackwardSplitAnchoredOnCurrent)
+                    {
+                        var currentTop = CropBitmapHalf(page0Image, topHalf: true);
+                        var previousBottom = CropBitmapHalf(page1Image, topHalf: false);
+
+                        topImage = _halfPageTurnLayout == HalfPageTurnLayout.Preview ? currentTop : previousBottom;
+                        bottomImage = _halfPageTurnLayout == HalfPageTurnLayout.Preview ? previousBottom : currentTop;
+
+                        topPageNo = _halfPageTurnLayout == HalfPageTurnLayout.Preview ? pageNo : secondPageNo;
+                        bottomPageNo = _halfPageTurnLayout == HalfPageTurnLayout.Preview ? secondPageNo : pageNo;
+
+                        topInkStroke = _halfPageTurnLayout == HalfPageTurnLayout.Preview
+                            ? CreateHalfInkStroke(GetInkStrokeForPage(pageNo), topHalf: true)
+                            : CreateHalfInkStroke(GetInkStrokeForPage(secondPageNo), topHalf: false);
+                        bottomInkStroke = _halfPageTurnLayout == HalfPageTurnLayout.Preview
+                            ? CreateHalfInkStroke(GetInkStrokeForPage(secondPageNo), topHalf: false)
+                            : CreateHalfInkStroke(GetInkStrokeForPage(pageNo), topHalf: true);
+                    }
+                    else
+                    {
+                        var currentBottom = CropBitmapHalf(page0Image, topHalf: false);
+                        var nextTop = CropBitmapHalf(page1Image, topHalf: true);
+
+                        topImage = _halfPageTurnLayout == HalfPageTurnLayout.Preview ? nextTop : currentBottom;
+                        bottomImage = _halfPageTurnLayout == HalfPageTurnLayout.Preview ? currentBottom : nextTop;
+
+                        topPageNo = _halfPageTurnLayout == HalfPageTurnLayout.Preview ? secondPageNo : pageNo;
+                        bottomPageNo = _halfPageTurnLayout == HalfPageTurnLayout.Preview ? pageNo : secondPageNo;
+
+                        topInkStroke = _halfPageTurnLayout == HalfPageTurnLayout.Preview
+                            ? CreateHalfInkStroke(GetInkStrokeForPage(secondPageNo), topHalf: true)
+                            : CreateHalfInkStroke(GetInkStrokeForPage(pageNo), topHalf: false);
+                        bottomInkStroke = _halfPageTurnLayout == HalfPageTurnLayout.Preview
+                            ? CreateHalfInkStroke(GetInkStrokeForPage(pageNo), topHalf: false)
+                            : CreateHalfInkStroke(GetInkStrokeForPage(secondPageNo), topHalf: true);
+                    }
+
+                    _inkCanvas0 = new InkCanvasControl(topImage, topPageNo, topInkStroke)
+                    {
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
+                        IsInkingEnabled = false
+                    };
+                    _inkCanvas0.SaveRequested += OnInkCanvasSaveRequested;
+                    _inkCanvas0.UndoRedoStateChanged += OnInkCanvasUndoRedoStateChanged;
+                    Grid.SetRow(_inkCanvas0, 0);
+                    grid.Children.Add(_inkCanvas0);
+
+                    var divider = new Border
+                    {
+                        Background = Brushes.Gray,
+                        Height = 1,
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+                        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+                    };
+                    Grid.SetRow(divider, 1);
+                    grid.Children.Add(divider);
+
+                    _inkCanvas1 = new InkCanvasControl(bottomImage, bottomPageNo, bottomInkStroke)
+                    {
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
+                        IsInkingEnabled = false
+                    };
+                    _inkCanvas1.SaveRequested += OnInkCanvasSaveRequested;
+                    _inkCanvas1.UndoRedoStateChanged += OnInkCanvasUndoRedoStateChanged;
+                    Grid.SetRow(_inkCanvas1, 2);
+                    grid.Children.Add(_inkCanvas1);
+                }
+                else if (Show2Pages && page1Image != null)
                 {
                     grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                     grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Pixel) });
@@ -997,10 +1185,10 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                 HasLink0 = hasLink0;
                 Link0Tooltip = hasLink0 ? $"Open: {link0}" : "No link for this song";
 
-                if (NumPagesPerView > 1)
+                if (Show2Pages || _isInSplitView)
                 {
-                    Description1 = GetDescription(pageNo + 1);
-                    var (hasLink1, link1) = GetLinkInfoForPage(pageNo + 1);
+                    Description1 = GetDescription(secondPageNo);
+                    var (hasLink1, link1) = GetLinkInfoForPage(secondPageNo);
                     HasLink1 = hasLink1;
                     Link1Tooltip = hasLink1 ? $"Open: {link1}" : "No link for this song";
                 }
@@ -1026,9 +1214,9 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                 {
                     _chkFav0.IsChecked = _currentPdfMetaData.IsFavorite(pageNo);
                 }
-                if (_chkFav1 != null && NumPagesPerView > 1)
+                if (_chkFav1 != null && (Show2Pages || _isInSplitView))
                 {
-                    _chkFav1.IsChecked = _currentPdfMetaData.IsFavorite(pageNo + 1);
+                    _chkFav1.IsChecked = _currentPdfMetaData.IsFavorite(secondPageNo);
                 }
                 _chkFavoriteEnabled = true;
             });
@@ -1534,7 +1722,7 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         
         _gestureHandler.NavigationRequested += (s, e) =>
         {
-            NavigateAsync(e.Delta);
+            _ = NavigateAsync(e.Delta);
         };
         
         _gestureHandler.DoubleTapped += (s, e) =>
@@ -1559,22 +1747,252 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         }
     }
     
-    private void NavigateAsync(int delta)
+    private async Task NavigateAsync(int delta)
     {
         _lastNavigationDelta = delta; // Track navigation direction
-        var newPage = CurrentPageNumber + delta;
-        
-        if (_currentPdfMetaData != null)
+        if (_currentPdfMetaData == null)
         {
-            var pageNumberOffset = _currentPdfMetaData.PageNumberOffset;
-            var maxPageNum = _currentPdfMetaData.MaxPageNum;
-            newPage = Math.Max(pageNumberOffset, Math.Min(newPage, maxPageNum - 1));
+            return;
         }
+
+        if (_halfPageTurnEnabled && !Show2Pages)
+        {
+            var halfPageOffset = _currentPdfMetaData.PageNumberOffset;
+            var lastPage = _currentPdfMetaData.MaxPageNum - 1;
+
+            if (delta > 0)
+            {
+                if (!_isInSplitView)
+                {
+                    if (CurrentPageNumber >= lastPage)
+                    {
+                        _isInSplitView = false;
+                        _isBackwardSplitAnchoredOnCurrent = false;
+                        return;
+                    }
+
+                    _isInSplitView = true;
+                    _isBackwardSplitAnchoredOnCurrent = false;
+                    await ShowPageAsync(CurrentPageNumber, preserveHalfPageState: true);
+                    return;
+                }
+
+                _isInSplitView = false;
+                if (_isBackwardSplitAnchoredOnCurrent)
+                {
+                    _isBackwardSplitAnchoredOnCurrent = false;
+                    await ShowPageAsync(CurrentPageNumber, preserveHalfPageState: true);
+                    return;
+                }
+
+                var nextPage = Math.Min(CurrentPageNumber + 1, lastPage);
+                if (nextPage != CurrentPageNumber)
+                {
+                    CurrentPageNumber = nextPage;
+                }
+                _isBackwardSplitAnchoredOnCurrent = false;
+                await ShowPageAsync(CurrentPageNumber, preserveHalfPageState: true);
+                return;
+            }
+
+            if (delta < 0)
+            {
+                if (_isInSplitView)
+                {
+                    _isInSplitView = false;
+                    if (_isBackwardSplitAnchoredOnCurrent)
+                    {
+                        CurrentPageNumber = Math.Max(halfPageOffset, CurrentPageNumber - 1);
+                    }
+                    _isBackwardSplitAnchoredOnCurrent = false;
+                    await ShowPageAsync(CurrentPageNumber, preserveHalfPageState: true);
+                    return;
+                }
+
+                if (CurrentPageNumber <= halfPageOffset)
+                {
+                    _isInSplitView = false;
+                    _isBackwardSplitAnchoredOnCurrent = false;
+                    return;
+                }
+
+                _isInSplitView = true;
+                if (_halfPageBackwardHalfStep)
+                {
+                    _isBackwardSplitAnchoredOnCurrent = true;
+                }
+                else
+                {
+                    _isBackwardSplitAnchoredOnCurrent = false;
+                    CurrentPageNumber = Math.Max(halfPageOffset, CurrentPageNumber - 1);
+                }
+                await ShowPageAsync(CurrentPageNumber, preserveHalfPageState: true);
+                return;
+            }
+        }
+
+        if (_playlistContext != null && _playlistContext.AutoAdvanceEnabled)
+        {
+            var titleRange = _playlistContext.GetTitlePageRange(_currentPdfMetaData);
+            var lastVisiblePage = CurrentPageNumber + NumPagesPerView - 1;
+
+            if (delta > 0 && lastVisiblePage >= titleRange.LastPage)
+            {
+                while (true)
+                {
+                    var nextEntry = _playlistContext.AdvanceToNext();
+                    if (nextEntry == null)
+                    {
+                        return;
+                    }
+
+                    var nextMetadata = ResolveMetadataByBookName(nextEntry.BookName);
+                    if (nextMetadata != null)
+                    {
+                        NotifyPlaylistContextChanged();
+                        await LoadPdfFileAndShowAsync(nextMetadata, nextEntry.PageNo);
+                        return;
+                    }
+
+                    ShowTemporarySkipNotification(nextEntry);
+                }
+            }
+
+            TryPrecacheNextPlaylistEntry();
+
+            if (delta < 0 && CurrentPageNumber <= titleRange.FirstPage)
+            {
+                while (true)
+                {
+                    var previousEntry = _playlistContext.GoToPrevious();
+                    if (previousEntry == null)
+                    {
+                        return;
+                    }
+
+                    var previousMetadata = ResolveMetadataByBookName(previousEntry.BookName);
+                    if (previousMetadata != null)
+                    {
+                        NotifyPlaylistContextChanged();
+                        var previousRange = _playlistContext.GetTitlePageRange(previousMetadata);
+                        await LoadPdfFileAndShowAsync(previousMetadata, previousRange.LastPage);
+                        return;
+                    }
+
+                    ShowTemporarySkipNotification(previousEntry);
+                }
+            }
+        }
+
+        var newPage = CurrentPageNumber + delta;
+
+        var pageNumberOffset = _currentPdfMetaData.PageNumberOffset;
+        var maxPageNum = _currentPdfMetaData.MaxPageNum;
+        newPage = Math.Max(pageNumberOffset, Math.Min(newPage, maxPageNum - 1));
         
         if (newPage != CurrentPageNumber)
         {
             CurrentPageNumber = newPage;
-            _ = ShowPageAsync(newPage);
+            await ShowPageAsync(newPage);
+        }
+    }
+
+    internal static Bitmap CropBitmapHalf(Bitmap sourceBitmap, bool topHalf)
+    {
+        using var sourceStream = new MemoryStream();
+        sourceBitmap.Save(sourceStream);
+        sourceStream.Seek(0, SeekOrigin.Begin);
+
+        using var sourceSkBitmap = SKBitmap.Decode(sourceStream);
+        if (sourceSkBitmap == null)
+        {
+            throw new InvalidOperationException("Failed to decode source bitmap for half-page cropping.");
+        }
+
+        var targetHeight = Math.Max(1, sourceSkBitmap.Height / 2);
+        var y = topHalf ? 0 : sourceSkBitmap.Height - targetHeight;
+        var subsetRect = new SKRectI(0, y, sourceSkBitmap.Width, y + targetHeight);
+
+        using var subsetBitmap = new SKBitmap(subsetRect.Width, subsetRect.Height, sourceSkBitmap.ColorType, sourceSkBitmap.AlphaType);
+        if (!sourceSkBitmap.ExtractSubset(subsetBitmap, subsetRect))
+        {
+            throw new InvalidOperationException("Failed to extract half-page bitmap subset.");
+        }
+
+        return ConvertSkBitmapToAvaloniaBitmap(subsetBitmap);
+    }
+
+    private static InkStrokeClass? CreateHalfInkStroke(InkStrokeClass? sourceInk, bool topHalf)
+    {
+        if (sourceInk?.StrokeData == null || sourceInk.StrokeData.Length == 0)
+        {
+            return sourceInk;
+        }
+
+        try
+        {
+            var json = Encoding.UTF8.GetString(sourceInk.StrokeData);
+            var sourceCollection = JsonSerializer.Deserialize<PortableInkStrokeCollection>(json);
+            if (sourceCollection == null || sourceCollection.CanvasHeight <= 0 || sourceCollection.Strokes.Count == 0)
+            {
+                return sourceInk;
+            }
+
+            var halfHeight = sourceCollection.CanvasHeight / 2.0;
+            var resultCollection = new PortableInkStrokeCollection
+            {
+                CanvasWidth = sourceCollection.CanvasWidth,
+                CanvasHeight = halfHeight
+            };
+
+            foreach (var stroke in sourceCollection.Strokes)
+            {
+                var clippedPoints = new List<PortableInkPoint>();
+                foreach (var point in stroke.Points)
+                {
+                    if (topHalf)
+                    {
+                        if (point.Y <= halfHeight)
+                        {
+                            clippedPoints.Add(new PortableInkPoint { X = point.X, Y = point.Y });
+                        }
+                    }
+                    else if (point.Y >= halfHeight)
+                    {
+                        clippedPoints.Add(new PortableInkPoint { X = point.X, Y = point.Y - halfHeight });
+                    }
+                }
+
+                if (clippedPoints.Count < 2)
+                {
+                    continue;
+                }
+
+                resultCollection.Strokes.Add(new PortableInkStroke
+                {
+                    Points = clippedPoints,
+                    Color = stroke.Color,
+                    Thickness = stroke.Thickness,
+                    IsHighlighter = stroke.IsHighlighter,
+                    Opacity = stroke.Opacity
+                });
+            }
+
+            if (resultCollection.Strokes.Count == 0)
+            {
+                return null;
+            }
+
+            return new InkStrokeClass
+            {
+                Pageno = sourceInk.Pageno,
+                InkStrokeDimension = new PortablePoint(sourceInk.InkStrokeDimension.X, sourceInk.InkStrokeDimension.Y / 2.0),
+                StrokeData = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(resultCollection))
+            };
+        }
+        catch
+        {
+            return sourceInk;
         }
     }
     
@@ -1608,7 +2026,81 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         
         // Regular navigation
         var delta = isPrevious ? -NumPagesPerView : NumPagesPerView;
-        NavigateAsync(delta);
+        _ = NavigateAsync(delta);
+    }
+
+    private PdfMetaDataReadResult? ResolveMetadataByBookName(string bookName)
+    {
+        return _lstPdfMetaFileData.FirstOrDefault(p =>
+            string.Equals(p.GetBookName(_rootMusicFolder), bookName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(p.GetBookName(), bookName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void ShowTemporarySkipNotification(PlaylistEntry skippedEntry)
+    {
+        var message = $"Skipped missing title: {skippedEntry.SongName}";
+        _ = Task.Run(async () =>
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                Title = $"{MyAppName} - {message}";
+            });
+
+            await Task.Delay(1500);
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                Title = _currentPdfMetaData != null
+                    ? $"{MyAppName} - {PdfTitle}"
+                    : MyAppName;
+            });
+        });
+    }
+
+    private void NotifyPlaylistContextChanged()
+    {
+        PlaylistPositionText = _playlistContext?.PositionText ?? string.Empty;
+        OnPropertyChanged(nameof(HasPlaylistContext));
+        OnPropertyChanged(nameof(AutoAdvanceEnabled));
+    }
+
+    private void TryPrecacheNextPlaylistEntry()
+    {
+        if (_playlistContext == null || _currentPdfMetaData == null)
+        {
+            return;
+        }
+
+        var titleRange = _playlistContext.GetTitlePageRange(_currentPdfMetaData);
+        var lastVisiblePage = CurrentPageNumber + NumPagesPerView - 1;
+        if (lastVisiblePage < titleRange.LastPage - 2)
+        {
+            return;
+        }
+
+        for (int i = _playlistContext.CurrentEntryIndex + 1; i < _playlistContext.TotalEntries; i++)
+        {
+            var nextEntry = _playlistContext.Playlist.Entries[i];
+            var nextMetadata = ResolveMetadataByBookName(nextEntry.BookName);
+            if (nextMetadata == null)
+            {
+                continue;
+            }
+
+            var volNo = nextMetadata.GetVolNumFromPageNum(nextEntry.PageNo);
+            _ = Task.Run(() => nextMetadata.GetOrLoadVolumeBytes(volNo));
+            break;
+        }
+    }
+
+    private static HalfPageTurnLayout ParseHalfPageTurnLayout(string? layout)
+    {
+        if (Enum.TryParse<HalfPageTurnLayout>(layout, ignoreCase: true, out var parsed))
+        {
+            return parsed;
+        }
+
+        return HalfPageTurnLayout.Preview;
     }
     
     #region Event Handlers
@@ -1663,6 +2155,38 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         if (!_disableSliderValueChanged && _currentPdfMetaData != null)
         {
             _ = ShowPageAsync(CurrentPageNumber);
+        }
+    }
+
+    private void TxtPageNo_LostFocus(object? sender, RoutedEventArgs e)
+    {
+        CommitPageNumberFromTextBox(sender as TextBox);
+    }
+
+    private void TxtPageNo_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            CommitPageNumberFromTextBox(sender as TextBox);
+            e.Handled = true;
+        }
+    }
+
+    private void CommitPageNumberFromTextBox(TextBox? textBox)
+    {
+        if (_currentPdfMetaData == null || textBox == null)
+        {
+            return;
+        }
+
+        if (int.TryParse(textBox.Text, out var pageNo))
+        {
+            CurrentPageNumber = pageNo;
+            _ = ShowPageAsync(CurrentPageNumber);
+        }
+        else
+        {
+            textBox.Text = CurrentPageNumber.ToString();
         }
     }
     
@@ -1967,13 +2491,13 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
                 case Key.Left:
                 case Key.Up:
                 case Key.PageUp:
-                    NavigateAsync(-NumPagesPerView);
+                    _ = NavigateAsync(-NumPagesPerView);
                     e.Handled = true;
                     break;
                 case Key.Right:
                 case Key.Down:
                 case Key.PageDown:
-                    NavigateAsync(NumPagesPerView);
+                    _ = NavigateAsync(NumPagesPerView);
                     e.Handled = true;
                     break;
             }
@@ -2011,18 +2535,118 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
 
     public int NumPagesPerView => _show2Pages ? 2 : 1;
 
+    public bool IsHalfPageTurnAvailable => PdfUIEnabled && !Show2Pages;
+
+    public bool HalfPageTurnEnabled
+    {
+        get => _halfPageTurnEnabled && !Show2Pages;
+        set
+        {
+            if (value && Show2Pages)
+            {
+                Show2Pages = false;
+            }
+
+            var normalized = value && !Show2Pages;
+            if (_halfPageTurnEnabled == normalized)
+            {
+                return;
+            }
+
+            _halfPageTurnEnabled = normalized;
+            if (!_halfPageTurnEnabled)
+            {
+                _isInSplitView = false;
+                _isBackwardSplitAnchoredOnCurrent = false;
+            }
+
+            AppSettings.Instance.HalfPageTurnEnabled = _halfPageTurnEnabled;
+            AppSettings.Instance.SaveLocal();
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsHalfPageTurnAvailable));
+
+            _ = ShowPageAsync(CurrentPageNumber);
+        }
+    }
+
+    public bool HalfPageBackwardHalfStep
+    {
+        get => _halfPageBackwardHalfStep;
+        set
+        {
+            if (_halfPageBackwardHalfStep == value)
+            {
+                return;
+            }
+
+            _halfPageBackwardHalfStep = value;
+            AppSettings.Instance.HalfPageBackwardHalfStep = value;
+            AppSettings.Instance.SaveLocal();
+            OnPropertyChanged();
+        }
+    }
+
+    public HalfPageTurnLayout HalfPageTurnLayout
+    {
+        get => _halfPageTurnLayout;
+        set
+        {
+            if (_halfPageTurnLayout == value)
+            {
+                return;
+            }
+
+            _halfPageTurnLayout = value;
+            AppSettings.Instance.HalfPageTurnLayout = _halfPageTurnLayout.ToString();
+            AppSettings.Instance.SaveLocal();
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsHalfPageLayoutPreview));
+            OnPropertyChanged(nameof(IsHalfPageLayoutReadingFlow));
+
+            if (_isInSplitView)
+            {
+                _ = ShowPageAsync(CurrentPageNumber, preserveHalfPageState: true);
+            }
+        }
+    }
+
+    public bool IsHalfPageLayoutPreview => _halfPageTurnLayout == HalfPageTurnLayout.Preview;
+
+    public bool IsHalfPageLayoutReadingFlow => _halfPageTurnLayout == HalfPageTurnLayout.ReadingFlow;
+
     public bool Show2Pages
     {
         get => _show2Pages;
         set
         {
+            if (_show2Pages == value)
+            {
+                return;
+            }
+
             _show2Pages = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(NumPagesPerView));
+            OnPropertyChanged(nameof(IsHalfPageTurnAvailable));
             
             if (_gestureHandler != null)
             {
                 _gestureHandler.NumPagesPerView = NumPagesPerView;
+            }
+
+            if (_show2Pages)
+            {
+                _isInSplitView = false;
+                _isBackwardSplitAnchoredOnCurrent = false;
+                if (_halfPageTurnEnabled)
+                {
+                    _halfPageTurnEnabled = false;
+                    AppSettings.Instance.HalfPageTurnEnabled = false;
+                    AppSettings.Instance.SaveLocal();
+                    OnPropertyChanged(nameof(HalfPageTurnEnabled));
+                }
             }
             
             ClearCache();
@@ -2037,6 +2661,7 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         {
             _pdfUIEnabled = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(IsHalfPageTurnAvailable));
         }
     }
 
@@ -2138,6 +2763,36 @@ public partial class PdfViewerWindow : Window, INotifyPropertyChanged
         {
             _cacheLoadingCount = value;
             OnPropertyChanged();
+        }
+    }
+
+    public string PlaylistPositionText
+    {
+        get => _playlistPositionText;
+        set
+        {
+            _playlistPositionText = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool HasPlaylistContext => _playlistContext != null;
+
+    public bool AutoAdvanceEnabled
+    {
+        get => _playlistContext?.AutoAdvanceEnabled ?? false;
+        set
+        {
+            if (_playlistContext == null)
+            {
+                return;
+            }
+
+            if (_playlistContext.AutoAdvanceEnabled != value)
+            {
+                _playlistContext.AutoAdvanceEnabled = value;
+                OnPropertyChanged();
+            }
         }
     }
     

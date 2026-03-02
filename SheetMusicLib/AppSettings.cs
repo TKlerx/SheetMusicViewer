@@ -362,6 +362,9 @@ public class AppSettings
 
     // View settings (toggled via menu, not Options dialog)
     public bool Show2Pages { get; set; } = true;
+    public bool HalfPageTurnEnabled { get; set; } = false;
+    public string HalfPageTurnLayout { get; set; } = "Preview";
+    public bool HalfPageBackwardHalfStep { get; set; } = false;
     public bool IsFullScreen { get; set; } = false;
 
     // Last opened PDF (machine-specific path)
@@ -412,6 +415,9 @@ public class AppSettings
                     settings.WindowLeft = localSettings.WindowLeft;
                     settings.WindowMaximized = localSettings.WindowMaximized;
                     settings.Show2Pages = localSettings.Show2Pages;
+                    settings.HalfPageTurnEnabled = localSettings.HalfPageTurnEnabled;
+                    settings.HalfPageTurnLayout = localSettings.HalfPageTurnLayout ?? "Preview";
+                    settings.HalfPageBackwardHalfStep = localSettings.HalfPageBackwardHalfStep;
                     settings.IsFullScreen = localSettings.IsFullScreen;
                     settings.LastPDFOpen = localSettings.LastPDFOpen;
                     settings.RootFolderMRU = localSettings.RootFolderMRU ?? new List<string>();
@@ -530,6 +536,9 @@ public class AppSettings
                 WindowLeft = WindowLeft,
                 WindowMaximized = WindowMaximized,
                 Show2Pages = Show2Pages,
+                HalfPageTurnEnabled = HalfPageTurnEnabled,
+                HalfPageTurnLayout = HalfPageTurnLayout,
+                HalfPageBackwardHalfStep = HalfPageBackwardHalfStep,
                 IsFullScreen = IsFullScreen,
                 LastPDFOpen = LastPDFOpen,
                 RootFolderMRU = RootFolderMRU,
@@ -659,6 +668,9 @@ public class AppSettings
         WindowLeft = defaults.WindowLeft;
         WindowMaximized = defaults.WindowMaximized;
         Show2Pages = defaults.Show2Pages;
+        HalfPageTurnEnabled = defaults.HalfPageTurnEnabled;
+        HalfPageTurnLayout = defaults.HalfPageTurnLayout;
+        HalfPageBackwardHalfStep = defaults.HalfPageBackwardHalfStep;
         IsFullScreen = defaults.IsFullScreen;
         LastPDFOpen = defaults.LastPDFOpen;
         RootFolderMRU.Clear();
@@ -721,6 +733,9 @@ public class AppSettings
         public double WindowLeft { get; set; } = 100;
         public bool WindowMaximized { get; set; } = true;
         public bool Show2Pages { get; set; } = true;
+        public bool HalfPageTurnEnabled { get; set; } = false;
+        public string HalfPageTurnLayout { get; set; } = "Preview";
+        public bool HalfPageBackwardHalfStep { get; set; } = false;
         public bool IsFullScreen { get; set; } = false;
         public string? LastPDFOpen { get; set; }
         public List<string> RootFolderMRU { get; set; } = new();
