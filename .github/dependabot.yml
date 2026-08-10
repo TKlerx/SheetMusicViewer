@@ -1,0 +1,45 @@
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directories:
+      - "/AvaloniaApplication1"
+      - "/AvaloniaTests"
+      - "/SheetMusicLib"
+      - "/SheetMusicViewer.Desktop"
+      - "/SheetMusicViewer"
+      - "/Tests"
+      - "/WpfApp"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
